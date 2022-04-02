@@ -1,0 +1,212 @@
+<!-- livebook:{"autosave_interval_s":30} -->
+
+# Tiny Renderer
+
+## Section
+
+```elixir
+Mix.install(
+  [
+    {:bump, path: "../ex_bump"},
+    :kino,
+    :benchee,
+    :graphmath
+  ],
+  force: true
+)
+```
+
+```elixir
+require Logger
+import Graphmath
+
+alias Graphmath.Vec2
+alias Graphmath.Vec3
+
+defmodule TinyRenderer do
+  @light_dir {0, 0, -1}
+
+  def render(canvas, file_path) do
+    file_path
+    |> File.stream!()
+    |> Stream.map(&String.split(String.replace_trailing(&1, "\n", ""), " "))
+    |> Enum.reduce(%{vertices: :array.new(), canvas: canvas}, &handle_line/2)
+  end
+
+  def triangle(canvas, t0, t1, t2, color) do
+    [t0, t1, t2] = Enum.sort_by([t0, t1, t2], &elem(&1, 1))
+
+    {_t0x, t0y} = t0
+    {_t1x, t1y} = t1
+    {_t2x, t2y} = t2
+
+    total_height = t2y - t0y
+
+    canvas =
+      t0y..t1y
+      |> Enum.reduce(canvas, fn y, canvas ->
+        segment_height = t1y - t0y + 1
+
+        alpha = (y - t0y) / total_height
+        beta = (y - t0y) / segment_height
+
+        {ax, _} =
+          t2
+          |> Vec2.subtract(t0)
+          |> Vec2.scale(alpha)
+          |> Vec2.add(t0)
+
+        {bx, _} =
+          t1
+          |> Vec2.subtract(t0)
+          |> Vec2.scale(beta)
+          |> Vec2.add(t0)
+
+        trunc(ax)..trunc(bx)
+        |> Enum.reduce(canvas, &Canvas.put(&2, {&1, y}, color))
+      end)
+
+    t1y..t2y
+    |> Enum.reduce(canvas, fn y, canvas ->
+      segment_height = t2y - t1y + 1
+
+      alpha = (y - t0y) / total_height
+      beta = (y - t1y) / segment_height
+
+      {ax, _} =
+        t2
+        |> Vec2.subtract(t0)
+        |> Vec2.scale(alpha)
+        |> Vec2.add(t0)
+
+      {bx, _} =
+        t2
+        |> Vec2.subtract(t1)
+        |> Vec2.scale(beta)
+        |> Vec2.add(t1)
+
+      trunc(ax)..trunc(bx)
+      |> Enum.reduce(canvas, &Canvas.put(&2, {&1, y}, color))
+    end)
+  end
+
+  defp round({x, y, _z}, %Size{width: width, height: height}) do
+    {
+      round((x + 1) * width / 2),
+      round((y + 1) * height / 2)
+    }
+  end
+
+  defp handle_line(["v" | coords], acc) do
+    t =
+      coords
+      |> Enum.map(&elem(Float.parse(&1), 0))
+      |> List.to_tuple()
+
+    update_in(acc, [:vertices], &:array.set(:array.size(&1), t, &1))
+  end
+
+  defp handle_line(["f" | vertices], acc) do
+    %Canvas{size: size} = acc.canvas
+
+    [w0, w1, w2] =
+      vertices
+      |> Stream.map(&String.split(&1, "/"))
+      |> Stream.map(&List.to_tuple/1)
+      |> Stream.map(fn {v, _, _} -> elem(Integer.parse(v), 0) end)
+      |> Stream.map(&:array.get(&1 - 1, acc.vertices))
+      |> Enum.to_list()
+
+    [t0, t1, t2] = Enum.map([w0, w1, w2], &round(&1, size))
+
+    n =
+      Vec3.cross(
+        Vec3.subtract(w2, w0),
+        Vec3.subtract(w1, w0)
+      )
+      |> Vec3.normalize()
+
+    level = round(Vec3.dot(n, @light_dir) * 255)
+
+    if level >= 0 && level <= 255 do
+      update_in(acc, [:canvas], fn canvas ->
+        try do
+          canvas
+          |> TinyRenderer.triangle(
+            t0,
+            t1,
+            t2,
+            %Color{red: level, green: level, blue: level}
+          )
+        rescue
+          _ -> canvas
+        end
+      end)
+    else
+      acc
+    end
+  end
+
+  defp handle_line(_, acc), do: acc
+end
+```
+
+<!-- livebook:{"reevaluate_automatically":true} -->
+
+```elixir
+import TinyRenderer
+
+Agent.start_link(fn -> nil end, name: CanvasState)
+
+render = fn ->
+  canvas =
+    {1400, 1400}
+    |> Size.new()
+    |> Canvas.new()
+    |> render("./african_head.obj")
+    |> Map.get(:canvas)
+
+  Agent.update(CanvasState, fn _ -> canvas end)
+end
+
+Benchee.run(
+  %{
+    render: render
+  },
+  time: 1,
+  save: [path: "benchmark.benchee"],
+  load: ["benchmark.benchee"]
+  # profile_after: true
+)
+
+:ok
+```
+
+<!-- livebook:{"reevaluate_automatically":true} -->
+
+```elixir
+Agent.get(CanvasState, & &1)
+|> Canvas.flip()
+|> Bump.to_iodata()
+|> IO.iodata_to_binary()
+|> Kino.Image.new("image/bmp")
+```
+
+```elixir
+import TinyRenderer
+
+canvas =
+  {200, 200}
+  |> Size.new()
+  |> Canvas.new()
+  |> triangle({10, 70}, {50, 160}, {70, 80}, Color.named(:red))
+  |> triangle({180, 50}, {150, 1}, {70, 180}, Color.named(:white))
+  |> triangle({180, 150}, {120, 160}, {130, 180}, Color.green())
+  |> triangle({100, 190}, {40, 40}, {170, 100}, Color.light_blue2())
+  |> Canvas.flip()
+  |> Bump.to_iodata()
+  |> IO.iodata_to_binary()
+  |> Kino.Image.new("image/bmp")
+```
+
+![](./red.png)

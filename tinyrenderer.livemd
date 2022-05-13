@@ -2,8 +2,6 @@
 
 # Tiny Renderer
 
-## Section
-
 ```elixir
 Mix.install(
   [
@@ -16,6 +14,8 @@ Mix.install(
 )
 ```
 
+## Section
+
 ```elixir
 require Logger
 import Graphmath
@@ -26,11 +26,27 @@ alias Graphmath.Vec3
 defmodule TinyRenderer do
   @light_dir {0, 0, -1}
 
+  defp handle_line(["v" | coords]) do
+    coords
+    |> Enum.map(&elem(Float.parse(&1), 0))
+    |> List.to_tuple()
+  end
+
   def render(canvas, file_path) do
-    file_path
-    |> File.stream!()
-    |> Stream.map(&String.split(String.replace_trailing(&1, "\n", ""), " "))
-    |> Enum.reduce(%{vertices: :array.new(), canvas: canvas}, &handle_line/2)
+    [vertices, faces] =
+      file_path
+      |> File.stream!()
+      |> Stream.filter(&String.starts_with?(&1, ["v ", "f "]))
+      |> Stream.map(&String.split(String.replace_trailing(&1, "\n", ""), " "))
+      |> Stream.chunk_by(&Enum.at(&1, 0))
+      |> Enum.to_list()
+
+    vertices =
+      vertices
+      |> Enum.map(&handle_line/1)
+
+    %{vertices: :array.new(), canvas: canvas}
+    # |> Enum.reduce(%{vertices: :array.new(), canvas: canvas}, &handle_line/2)
   end
 
   def triangle(canvas, t0, t1, t2, color) do
